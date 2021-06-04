@@ -125,10 +125,17 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			XorEncrypt(methodsData);
 
 			var methodsDataReader = ByteArrayDataReaderFactory.CreateReader(methodsData);
+
+			int tmp = methodsDataReader.ReadInt32();
+			if ((tmp & 0xFF000000) == 0x06000000)
+				methodsDataReader.ReadInt32();
+			else
+				methodsDataReader.Position -= 4;
+
 			int patchCount = methodsDataReader.ReadInt32();
 			int mode = methodsDataReader.ReadInt32();
 
-			int tmp = methodsDataReader.ReadInt32();
+			tmp = methodsDataReader.ReadInt32();
 			methodsDataReader.Position -= 4;
 			if ((tmp & 0xFF000000) == 0x06000000) {
 				// It's method token + rva. DNR 3.7.0.3 (and earlier?) - 3.9.0.1
@@ -148,6 +155,7 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 
 				PatchDwords(peImage, ref methodsDataReader, patchCount);
 				bool oldCode = !IsNewer45Decryption(encryptedResource.Method);
+				bool isUsingOffset = !IsUsingRva(encryptedResource.Method);
 				while (methodsDataReader.Position < methodsData.Length - 1) {
 					uint rva = (uint) methodsDataReader.ReadInt32();
 					int size;
@@ -159,7 +167,10 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 						size = methodsDataReader.ReadInt32() * 4;
 
 					var newData = methodsDataReader.ReadBytes(size);
-					peImage.DotNetSafeWrite(rva, newData);
+					if (unpackedNativeFile && isUsingOffset)
+						peImage.DotNetSafeWriteOffset(rva, newData);
+					else
+						peImage.DotNetSafeWrite(rva, newData);
 				}
 			}
 			else {
@@ -260,6 +271,36 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 					continue;
 				var call = instrs[i + 4];
 				if (call.OpCode.Code != Code.Call)
+					continue;
+
+				return true;
+			}
+			return false;
+		}
+
+		public static bool IsUsingRva(MethodDef method) {
+			if (method?.Body == null)
+				return false;
+
+			var instrs = method.Body.Instructions;
+			for (int i = 0; i < instrs.Count; i++) {
+				if (instrs[i].OpCode != OpCodes.Ldloca_S)
+					continue;
+				if (instrs[i + 1].OpCode != OpCodes.Ldsfld)
+					continue;
+				if (instrs[i + 2].OpCode != OpCodes.Ldloc_S)
+					continue;
+				if (instrs[i + 3].OpCode != OpCodes.Conv_I8)
+					continue;
+				if (instrs[i + 4].OpCode != OpCodes.Add)
+					continue;
+				if (instrs[i + 5].OpCode != OpCodes.Ldloc_S)
+					continue;
+				if (instrs[i + 6].OpCode != OpCodes.Conv_I8)
+					continue;
+				if (instrs[i + 7].OpCode != OpCodes.Sub)
+					continue;
+				if (instrs[i + 8].OpCode.Code != Code.Call)
 					continue;
 
 				return true;
